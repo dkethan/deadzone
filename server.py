@@ -1,4 +1,4 @@
-"""
+﻿"""
 FastAPI server for Agent 1.
 Exposes POST /predict so Agent 2 (or Streamlit) can call it over HTTP.
 
@@ -10,10 +10,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+import re
+import json
 
 from agent1 import run_agent1
 
-app = FastAPI(title="Dead Zone Prediction API — Agent 1", version="1.0.0")
+app = FastAPI(title="Dead Zone Prediction API - Agent 1", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,26 +30,25 @@ class PredictRequest(BaseModel):
     departure_time: str
 
 
-class PredictResponse(BaseModel):
-    route: str
-    departure_time: str
-    agent1_output: str
-
-
 @app.get("/health")
 def health():
     return {"status": "ok", "agent": "agent1"}
 
 
-@app.post("/predict", response_model=PredictResponse)
+@app.post("/predict")
 def predict(req: PredictRequest):
     try:
-        output = run_agent1(req.route, req.departure_time, verbose=True)
-        return PredictResponse(
-            route=req.route,
-            departure_time=req.departure_time,
-            agent1_output=output,
-        )
+        output = run_agent1(req.route, req.departure_time, verbose=False)
+        clean = re.sub(r"```(?:json)?", "", output).strip()
+        try:
+            dead_zones = json.loads(clean)
+        except Exception:
+            dead_zones = {"raw": output}
+        return {
+            "route": req.route,
+            "departure_time": req.departure_time,
+            "dead_zones": dead_zones
+        }
     except EnvironmentError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except RuntimeError as e:
