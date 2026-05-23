@@ -1,265 +1,139 @@
-# Hackathon Onboarding — Agentic Engineering Hack
-# May 23, Datadog NYC | Deadline: 4:30 PM sharp
+# DeadZone Agent
 
----
+> An AI agent that builds you a cited offline content pack right before you lose signal — and sells it to the next driver who hits the same dead zone.
 
-## The Track
+## The problem
 
-**Context Engineering Challenge — Build agents that act on the web**
+You're driving NYC → Burlington. Twenty miles of the Adirondacks have no cell service. By the time the bars drop you've lost the weather, the road conditions, the news, the "is that gas station still open" question — all of it. You only notice once it's already too late.
 
-> Ship an autonomous agent that does real work on the open web.
-> Agents must take real action (publish, monitor, orchestrate, transact), grounded in real sources. Use 2+ sponsor tools.
+## What DeadZone Agent does
 
----
-
-## Our Project: Dead Zone Content Agent
-
-### The Problem
-Everyone has experienced cellular dead zones. Current systems react AFTER signal drops — they buffer, degrade, fail. Nobody predicts dead zones ahead of time and prepares for them.
-
-### The Idea
-A two-agent AI system that:
-1. **Predicts** dead zones on your route before you hit them
-2. **Autonomously fetches** real content from the web so offline playback is ready before signal drops
-
-### User Story
-> "I'm driving Manhattan to Newark at 5pm. The agent detects a 3-minute dead zone at Lincoln Tunnel at 5:12pm. While I still have signal, it fetches a podcast clip and caches navigation. I hit the tunnel — nothing freezes."
-
-### Why It Fits the Track
-- Real action on the open web: Nimble scrapes real articles/podcasts
-- Grounded in real sources: ClickHouse signal data + Nimble real URLs
-- Autonomous: agent reasons about WHICH content, WHEN to fetch, WHAT fits the window
-- Context engineering: Agent 1 builds dead zone context → hands to Agent 2 → Agent 2 acts
-
----
-
-## Prize Targets (aim for all three)
-
-| Sponsor | Prize | Our Integration |
-|---------|-------|----------------|
-| **Nimble** | $1,500 (1st: $1k Amazon + $1k credits) | Agent 2 fetches real web content via Nimble |
-| **ClickHouse** | $1,000 (1st: $1k cash + $500 credits) | Agent 1 queries signal history from ClickHouse |
-| **Senso.ai** | $3,000 credits | Knowledge base for known dead zone patterns |
-
----
-
-## Sponsor Tools & How We Use Them
-
-### Nimble — Web Scraping / Content Fetching
-- Agent 2 calls Nimble to fetch real articles and podcast clips from the open web
-- Matches content length to dead zone duration (3+ min → article, 1-2 min → podcast clip)
-- Sign up: nimbleway.com
-
-### ClickHouse — Signal History Database
-- Stores historical cellular signal quality data (location, strength, timestamp)
-- Agent 1 queries this to identify dead zone patterns on a given route
-- Sign up: clickhouse.com/cloud (free tier)
-
-### Senso.ai — Context Layer / Knowledge Base
-- Stores verified knowledge about known dead zones (pre-loaded patterns, route-specific rules)
-- Agent 1 queries Senso FIRST for known dead zones before hitting ClickHouse for historical data
-- Install CLI: `npm install -g @senso-ai/cli`
-- Docs: docs.senso.ai
-
-### Datadog Lapdog — LLM Observability
-- Runs on localhost:8126, captures every span, prompt, tool call, and cost
-- Install: `pipx install ddapm-test-agent`
-- Run: `lapdog python main.py`
-- Shows judges a real trace UI of agent decisions — huge demo value
-
-### Google DeepMind / Gemini 2.0 Flash
-- Reasoning engine for both agents
-- Accessed via OpenRouter (API key already in .env)
-- Model: `google/gemini-2.0-flash-001`
-
----
-
-## Architecture
+When your car is ~4 minutes out from a known dead zone, the agent wakes up and **autonomously**:
 
 ```
-Agent 1 — Prediction Agent
-  input:  route + departure time
-  tools:  query_senso_knowledge, query_signal_history, predict_dead_zones
-  output: structured dead zone list (location, start_time, duration_minutes, severity)
-
-        ↓ HANDOFF (agent1_output injected into agent2 user message)
-
-Agent 2 — Content Curation Agent
-  input:  dead zone predictions from Agent 1
-  tools:  fetch_content (via Nimble), queue_content
-  output: content queue ready for offline playback
+detect dead zone  →  LLM reasons about what you'll need
+       ↓
+       searches the web (weather · roads · POIs · local news)
+       ↓
+       publishes a cited, offline-readable pack to a public URL
+       ↓
+       delivers it to your phone before you lose signal
 ```
 
----
+You see a banner go ⚠️ → 🔄 → ✅ and a live log of every tool call the agent makes. Tap the banner, get the pack.
 
-## Tech Stack
+## How the agent works (the interesting part)
+
+The orchestrator is **not a hardcoded pipeline.** It's an OpenAI function-calling loop — the LLM is given a set of tools as JSON schemas and decides which to call, in what order, with what arguments.
+
+Tools the agent has:
+
+- `nimble_search(query)` — web search via Nimble
+- `senso_publish(title, sections)` — publish a cited pack to `cited.md`
+- `clickhouse_find_recent_pack(route_id, deadzone_id)` — cache lookup
+- `clickhouse_save_pack(...)` / `clickhouse_log_event(...)` — telemetry
+- `payments_pay(from, to, amount)` — agent-to-agent settlement
+
+Loop pattern (per [OpenAI's function-calling guide](https://developers.openai.com/api/docs/guides/function-calling)):
+
+1. Send messages + tool schemas to the model.
+2. If the response includes `tool_calls`, run them and append results as `role: "tool"` messages.
+3. Repeat until the model returns plain text. Done.
+
+Every tool wrapper emits a WebSocket event when invoked, so the UI streams the agent's reasoning live. That's the "visible autonomy" you see in the log panel.
+
+## Agent-to-agent payments
+
+When **user B** drives the same route and hits the same dead zone, their agent finds the pack **user A's agent** already built — and *buys it* instead of rebuilding it.
+
+- Simulated x402-style settlement — fake tx hash, no on-chain dependencies, demo never blocks.
+- Each agent has a stable demo wallet address shown in the payment event.
+- The dashboard ticks up: `1 sold · $0.02 paid`.
+
+This is the pitch: agents transacting with each other for already-done work, with the LLM deciding when to buy vs. when to build.
+
+## Observability via Datadog LLM Observability
+
+Every run of the agent shows up in [Datadog LLM Observability](https://docs.datadoghq.com/llm_observability/) as a single trace with the full waterfall:
 
 ```
-Backend:   Python, FastAPI, raw OpenAI client (NO frameworks)
-Frontend:  Streamlit
-Database:  ClickHouse Cloud (free tier)
-Scraping:  Nimble API
-Knowledge: Senso.ai
-Model:     Gemini 2.0 Flash via OpenRouter
-Observ:    Datadog Lapdog (localhost:8126)
+workflow: deadzone_signal
+  └── agent: pack_builder
+        ├── llm: openai.chat.completions.create   (auto-instrumented)
+        ├── tool: clickhouse_find_recent_pack
+        ├── llm: openai.chat.completions.create
+        ├── tool: nimble_search × 4               (parallel)
+        ├── tool: senso_publish
+        ├── tool: x402_pay                        (cache-hit path)
+        └── llm: openai.chat.completions.create
 ```
 
----
+We use the official `ddtrace` SDK with:
+- `LLMObs.enable(agentless_enabled=True)` at process startup — no Datadog Agent process needed.
+- `@workflow / @agent / @tool` decorators from `ddtrace.llmobs.decorators` on `orchestrator.run`, `_run_with_llm`, and each tool wrapper.
+- Auto-instrumentation of the OpenAI SDK — every `chat.completions.create` becomes an LLM span with prompt, response, token counts, latency.
+- `LLMObs.annotate(input_data=, output_data=, metadata=, tags=)` inside each tool so spans carry meaningful context (query, source counts, settlement type, etc.).
 
-## Environment Setup
+If `DD_API_KEY` isn't set, all decorators no-op and the rest of the demo runs identically.
+
+Where to look in Datadog: **LLM Observability → Applications → `deadzone-agent`** — every signal becomes one trace.
+
+## Tech stack
+
+- **Backend:** Python 3.11 · FastAPI · OpenAI SDK (function calling) · `clickhouse-connect` · `httpx` · WebSockets
+- **Frontend:** Next.js 14 (App Router) · TypeScript · Tailwind · `react-leaflet`
+- **Storage:** ClickHouse Cloud (free tier) with in-memory fallback
+- **Observability:** Datadog (metrics + logs via HTTP intake)
+- **Sponsors:** Nimble (web search) · Senso (publish to cited.md) · Datadog (observability)
+
+## Repo layout
+
+```
+deadzone/
+├── backend/
+│   ├── main.py                    # FastAPI app + OpenAI tool-calling loop + /ws
+│   ├── tools/
+│   │   ├── nimble.py              # web search (with stub fallback)
+│   │   ├── senso.py               # publish to cited.md (with static-file fallback)
+│   │   ├── clickhouse_db.py       # cache + telemetry
+│   │   └── payments.py            # CDP wallet + simulated x402 transfer
+│   ├── schema.sql                 # ClickHouse DDL
+│   ├── seed.py                    # pre-seed packs/events so the dashboard isn't empty
+│   └── requirements.txt
+└── frontend/
+    ├── app/page.tsx               # the only page — map + log panel + dashboard
+    ├── lib/route.ts               # hardcoded NYC→Burlington polyline + dead zones
+    └── components/                # Banner, Map, PackModal, Dashboard
+```
+
+## Quick start
 
 ```bash
-# 1. Copy the .env file (Shageenth has the OpenRouter key)
-cp /mnt/c/Users/shage/let-us-git-along/.env ~/FOLDER_NAME/.env
+# 1. Backend
+cd backend
+cp .env.example .env       # fill in OPENAI_API_KEY, NIMBLE_API_KEY, SENSO_API_KEY,
+                           # CLICKHOUSE_*, DD_API_KEY (all optional — fallbacks exist)
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
 
-# 2. Create and activate virtual environment
-python3 -m venv ~/hackathon && source ~/hackathon/bin/activate
+# 2. Frontend (new terminal)
+cd frontend
+npm install
+npm run dev
 
-# 3. Install dependencies
-pip install openai fastapi uvicorn streamlit clickhouse-connect python-dotenv
-
-# 4. Install Lapdog
-pipx install ddapm-test-agent
-
-# 5. Install Senso CLI
-npm install -g @senso-ai/cli
+# 3. Open http://localhost:3000
 ```
 
-```python
-# Every Python file loads env like this:
-from dotenv import load_dotenv
-import os
+Missing API keys? Every tool wrapper has a deterministic stub fallback so the demo still runs end-to-end.
 
-load_dotenv()
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-```
+## Demo flow
 
----
+1. **User A starts a trip.** Dot moves along the route. Hits the first dead zone. Banner ⚠️ → 🔄. Log panel streams the agent's tool calls (Nimble × N, Senso publish, ClickHouse writes). Banner ✅. Tap it → modal opens with the live `cited.md` page.
+2. **Switch to User B. Start their trip.** Same route, same dead zone. This time the agent finds the cached pack, fires a payment to User A, and delivers in ~1 second. Banner shows a "bought from agent_a — $0.02" badge.
+3. **Bottom dashboard:** `1 built · 1 sold · $0.02 paid · ~8s avg build`.
 
-## The Core Agent Loop (use this exact pattern)
+That's the demo. If those three steps work, the submission works.
 
-```python
-from openai import OpenAI
-import json
+## Status
 
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY
-)
-
-messages = [
-    {"role": "system", "content": "Your agent's role and instructions"},
-    {"role": "user", "content": "The goal"}
-]
-
-MAX_ITERATIONS = 50  # high — prompt handles stopping, this is just a safety net
-iteration = 0
-
-while iteration < MAX_ITERATIONS:
-    iteration += 1
-    response = client.chat.completions.create(
-        model="google/gemini-2.0-flash-001",
-        messages=messages,
-        tools=tools
-    )
-    msg = response.choices[0].message
-
-    if msg.tool_calls:
-        messages.append(msg)                     # append ONCE before loop
-        for tool_call in msg.tool_calls:         # loop ALL tool calls, never just [0]
-            fn_name = tool_call.function.name
-            fn_args = json.loads(tool_call.function.arguments)
-            try:
-                result = your_functions[fn_name](**fn_args)
-            except Exception as e:
-                result = {"error": str(e), "status": "failed"}
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": json.dumps(result)
-            })
-    else:
-        agent_output = msg.content
-        break
-```
-
-## The Handoff Pattern
-
-```python
-# Agent 1 finishes → inject output into Agent 2
-messages_agent2 = [
-    {"role": "system", "content": "Agent 2 system prompt..."},
-    {"role": "user", "content": f"Here are the dead zones: {agent1_output}. Fetch content for each."}
-]
-```
-
----
-
-## Working System Prompts
-
-**Agent 1:**
-```
-You are a signal prediction expert. Analyze routes and identify dead zones using your tools.
-Always include location, start_time, duration_minutes, and severity for each dead zone.
-Your final conclusion will be passed directly to another AI agent — structure it clearly
-so that agent can immediately act on it without ambiguity.
-If a tool returns an error, do not retry — move on and work with what you have.
-```
-
-**Agent 2:**
-```
-You are a content curation agent. Given dead zone predictions, fetch appropriate content
-for each dead zone based on its duration. Use these exact rules:
-- 3+ minutes → fetch an article
-- 1-2 minutes → fetch a podcast clip
-- Always also cache navigation regardless of duration
-If a tool returns an error, move on and summarize what you successfully fetched.
-```
-
----
-
-## Key Rules — DO NOT BREAK
-
-1. **NO frameworks** — no LangChain, no AG2, no CrewAI, no AutoGen
-2. **Raw OpenAI client only** for the agent loop
-3. **For loop over ALL tool_calls** — never just handle `[0]`
-4. **Append msg ONCE before the for loop** — results appended inside loop
-5. **MAX_ITERATIONS = 50** — set high, prompt handles stopping
-6. **NEVER use `response_format={"type": "json_object"}` with tools** — breaks tool calling
-7. **Simulated data is fine** — tell judges upfront, architecture is what matters
-8. **Tell agents WHO reads their output** — not HOW to format it
-
----
-
-## Judging Criteria (20% each)
-
-| Criteria | How we score |
-|----------|-------------|
-| **Autonomy** | Agent reasons about which content, when to fetch, what fits the window |
-| **Idea** | Clear real-world problem, Nokia/telecom angle for pitch |
-| **Technical Implementation** | Raw loop, real handoff, no frameworks |
-| **Tool Use** | Nimble + ClickHouse + Senso + Lapdog |
-| **Presentation** | 3-min demo recording — plan and record before 4:00 PM |
-
----
-
-## Submission Checklist
-- [ ] Public GitHub repo (create early, push often)
-- [ ] 3-minute demo recording (record by 4:00 PM, submit by 4:30 PM)
-- [ ] Both agents running end-to-end
-- [ ] At least 2 sponsor tools wired in (aim for 3)
-- [ ] Lapdog running during demo for observability trace
-
----
-
-## 60-Second Pitch
-
-> "We built a two-agent AI system that predicts cellular dead zones before you hit them and autonomously fetches real content from the web. Agent 1 queries our Senso knowledge base and ClickHouse signal history to predict dead zones with location, timing, and severity. It hands off to Agent 2 which uses Nimble to fetch real articles and podcast clips — matching content length to dead zone duration. Gemini is the reasoning engine. The whole system is built raw — no frameworks — so every decision the LLM makes is transparent. This is context engineering: the agent builds the right context before you lose connectivity."
-
----
-
-## Division of Work
-
-**Shageenth (backend):** Agent loop, tool functions, ClickHouse queries, Nimble integration, Senso integration, FastAPI server
-
-**Friend (frontend):** Streamlit UI, simulated route data, demo polish, Lapdog trace screenshots for slides
+Hackathon project. No tests, no auth, no Docker, no production hardening. The point is to show an LLM-driven agent loop that uses real sponsor APIs, falls back gracefully, and demonstrates a believable agent-to-agent economy in under three minutes.
