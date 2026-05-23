@@ -21,7 +21,9 @@ export default function Toast({
   useEffect(() => {
     const id = setTimeout(onDismiss, autoDismissMs);
     return () => clearTimeout(id);
-  }, [onDismiss, autoDismissMs]);
+    // mount-only: ignore identity changes of onDismiss so the timer actually fires
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const c = CONFIG[variant];
   return (

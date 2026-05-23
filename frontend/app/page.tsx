@@ -56,7 +56,7 @@ export default function Page() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [offlineActive, setOfflineActive] = useState(false);
   const [packModalOpen, setPackModalOpen] = useState(false);
-  const [lastPack, setLastPack] = useState<{ url: string; cached: boolean; paidAmount?: number } | null>(null);
+  const [lastPack, setLastPack] = useState<{ url: string; cached: boolean; paidAmount?: number; html?: string | null } | null>(null);
   const [lastPayment, setLastPayment] = useState<{ amount: number; from: string; to: string } | null>(null);
 
   // ---- WebSocket: drive overlays/toasts/logs from server events ----
@@ -86,12 +86,21 @@ export default function Page() {
             const pack = {
               url: ev.url, cached: !!ev.cached,
               paidAmount: ev.cached ? lastPayment?.amount : undefined,
+              html: null as string | null,
             };
             setLastPack(pack);
             setOverlay({
               kind: "ready", url: ev.url, cached: !!ev.cached,
               paidAmount: ev.cached ? lastPayment?.amount : undefined,
             });
+            // Pre-fetch the pack HTML and cache it client-side so the modal
+            // can render even if the network drops afterwards.
+            fetch(ev.url)
+              .then((r) => r.text())
+              .then((html) =>
+                setLastPack((p) => (p && p.url === ev.url ? { ...p, html } : p))
+              )
+              .catch(() => {});
           }
         } catch {}
       };
@@ -120,27 +129,28 @@ export default function Page() {
             ? ROUTE_POLYLINE[ROUTE_POLYLINE.length - 1]
             : lerp(ROUTE_POLYLINE[segIdx], ROUTE_POLYLINE[segIdx + 1], segT);
 
-          // Zone enter/exit detection
+          // Zone enter detection
           const triggered = new Set(t.triggered);
           let insideZone: string | null = null;
+          let justEntered = false;
           for (const dz of DEAD_ZONES) {
             const d = distanceKm(pos, { lat: dz.lat, lng: dz.lng });
             if (d <= dz.radius_km) {
               insideZone = dz.id;
               if (!triggered.has(dz.id)) {
                 triggered.add(dz.id);
+                justEntered = true;
                 handleZoneEnter(u, pos, dz.id, dz.name);
               }
               break;
             }
           }
-          if (t.insideZone && !insideZone) {
-            // exited zone
-            handleZoneExit();
-          }
+          // Park the dot inside the first zone it enters — gives the demo time
+          // for the Ready card / Open Continuity Pack interaction.
           next[u] = {
             ...t, segIdx, segT: atEnd ? 1 : segT,
-            pos, insideZone, triggered, running: !atEnd,
+            pos, insideZone, triggered,
+            running: !atEnd && !justEntered,
           };
         });
         return next;
@@ -168,12 +178,7 @@ export default function Page() {
     setOfflineActive(true);
   }
 
-  function handleZoneExit() {
-    setOfflineActive(false);
-    setOverlay({ kind: "none" });
-    pushToast({ id: _toastSeq++, variant: "reconnecting" });
-    setTimeout(() => pushToast({ id: _toastSeq++, variant: "synced" }), 1700);
-  }
+  // (handleZoneExit removed — the dot parks inside the zone, never exits in the demo)
 
   function pushToast(t: ToastItem) {
     setToasts((arr) => [...arr, t]);
@@ -186,6 +191,8 @@ export default function Page() {
   function startTrip(u: User) {
     setOverlay({ kind: "none" });
     setOfflineActive(false);
+    setToasts([]);                  // clear any stale toasts
+    setEvents([]);                  // fresh log per trip
     setTrips((p) => ({ ...p, [u]: { ...initialTrip(), running: true } }));
     setActiveUser(u);
   }
@@ -193,6 +200,7 @@ export default function Page() {
     setTrips((p) => ({ ...p, [u]: initialTrip() }));
     setOverlay({ kind: "none" });
     setOfflineActive(false);
+    setToasts([]);
   }
 
   const dots = useMemo(
@@ -294,6 +302,7 @@ export default function Page() {
       {packModalOpen && lastPack && (
         <PackModal
           url={lastPack.url}
+          html={lastPack.html}
           cached={lastPack.cached}
           paidAmount={lastPack.paidAmount}
           onClose={() => setPackModalOpen(false)}

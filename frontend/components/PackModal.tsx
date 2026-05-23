@@ -1,8 +1,10 @@
 "use client";
 
 export default function PackModal({
-  url, cached, paidAmount, onClose,
-}: { url: string; cached: boolean; paidAmount?: number; onClose: () => void }) {
+  url, html, cached, paidAmount, onClose,
+}: { url: string; html?: string | null; cached: boolean; paidAmount?: number; onClose: () => void }) {
+  // Prefer the cached HTML blob (works without network). Fall back to URL.
+  const offline = !!html;
   return (
     <div
       className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-sm flex items-center justify-center p-6"
@@ -33,9 +35,18 @@ export default function PackModal({
             ✕
           </button>
         </div>
-        <iframe src={url} className="flex-1 w-full bg-white" />
-        <div className="p-2 border-t bg-slate-50 text-xs text-slate-500 truncate shrink-0">
-          <span className="font-mono">{url}</span>
+        {html ? (
+          <iframe srcDoc={html} className="flex-1 w-full bg-white" sandbox="allow-popups" />
+        ) : (
+          <iframe src={url} className="flex-1 w-full bg-white" />
+        )}
+        <div className="p-2 border-t bg-slate-50 text-xs text-slate-500 truncate shrink-0 flex items-center gap-2">
+          {offline && (
+            <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-medium">
+              📴 served from offline cache
+            </span>
+          )}
+          <span className="font-mono truncate">{url}</span>
         </div>
       </div>
     </div>
